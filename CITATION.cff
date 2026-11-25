@@ -22,6 +22,20 @@ authors:
   - given-names: Yuanmai
     family-names: Zheng
     affiliation: Fudan University
+  - given-names: Liangliang
+    family-names: Hong
+    affiliation: Fudan University
+  - given-names: Xingao
+    family-names: Gong
+    affiliation: Fudan University
+  - given-names: Hongjun
+    family-names: Xiang
+    affiliation: Fudan University
+    orcid: https://orcid.org/0000-0002-9396-3214
+  - given-names: Hongyu
+    family-names: Yu
+    affiliation: Fudan University
+    orcid: https://orcid.org/0000-0002-2513-2523
 keywords:
   - spin-lattice dynamics
   - magnetic materials
