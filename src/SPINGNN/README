@@ -1,0 +1,13 @@
+SPINGNN: spin-aware LAMMPS overlay
+
+The cached-field integrator (CFI) supports frozen spins, moving lattices with its internal OU bath and
+isotropic canonical-volume NPT. The predictor fresh option is centered SIB.
+SPIN is required. The ML pair files are moved unchanged from the exact baseline
+by the top-level installer; model files are not supplied.
+
+Call counting: every native run emits an OBSERVE85 JSON line to screen.
+Fixed integer counters wrap existing pair, communication and neighbor calls;
+formatting happens only at run end. Read core, fresh, sib_mid and accept
+separately. Accepted-state output evaluations do not enter the dynamics.
+
+See doc/fix_spin_lpsib.rst, KNOWN-LIMITATIONS.md and top-level VALIDATION.md.

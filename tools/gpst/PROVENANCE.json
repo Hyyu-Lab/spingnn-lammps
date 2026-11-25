@@ -1,0 +1,16 @@
+{
+  "reference": {
+    "version": "1.0.0",
+    "manifest_SHA256": "bd4655946a560db099433796fd0b128766392aea8813c5cf8f276a318a080480"
+  },
+  "accelerated": {
+    "version": "1.1",
+    "manifest_SHA256": "ee986f6d0be8802a1ec443aed317f1b4f2fc4acc5c0d654e8ee7df16765dfd09"
+  },
+  "tests": {
+    "original_SHA256": "d9b4a04a3ab81e25dec5746b4734cdb344b3cf1cafa4472b09849257ad948edc",
+    "adaptation": "Only module imports, root paths and source-guard paths changed; test bodies retained."
+  },
+  "force_contract": "f = hbar * fm for unit spin directions; explicit caller confirmation required",
+  "online_compute_included": false
+}

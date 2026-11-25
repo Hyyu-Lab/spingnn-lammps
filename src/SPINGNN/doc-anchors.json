@@ -1,0 +1,10 @@
+{
+  "source": "fix_spin_lpsib.cpp",
+  "entry_points": [
+    "FixSpinLPSIB::FixSpinLPSIB",
+    "FixSpinLPSIB::init",
+    "FixSpinLPSIB::initial_integrate",
+    "FixSpinLPSIB::final_integrate",
+    "FixSpinLPSIB::box_check_pair"
+  ]
+}

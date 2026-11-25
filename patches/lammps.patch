@@ -1,0 +1,347 @@
+--- a/lammps/NOTICE.md
++++ b/lammps/NOTICE.md
+@@ -50,3 +50,10 @@
+ the upstream commit identified above. This notice is intended to make the
+ modified status and modification date explicit while preserving all upstream
+ license and attribution notices.
++
++On 19 November 2026, the SPINGNN overlay was updated with unified frozen,
++moving-lattice and isotropic canonical-volume integration by the cached-field integrator (CFI), including
++the centered SIB control and fixed-storage call counters. Spin-aware ML pairs
++are relocated without numerical changes. The set-spin atom-variable mapping
++correction is retained. The native spin/sib_npt cache path is unchanged.
++Experimental styles from earlier development are not included.
+--- a/lammps/cmake/CMakeLists.txt
++++ b/lammps/cmake/CMakeLists.txt
+@@ -226,6 +226,7 @@
+   SMTBQ
+   SPH
+   SPIN
++  SPINGNN
+   SRD
+   TALLY
+   UEF
+@@ -442,7 +443,7 @@
+ endif()
+ 
+ foreach(PKG_WITH_INCL KSPACE PYTHON ML-IAP VORONOI COLVARS ML-HDNNP MDI MOLFILE NETCDF
+-        PLUMED QMMM ML-QUIP SCAFACOS MACHDYN VTK KIM LATTE MESSAGE MSCG COMPRESS ML-PACE)
++        PLUMED QMMM ML-QUIP SCAFACOS MACHDYN VTK KIM LATTE MESSAGE MSCG COMPRESS ML-PACE SPINGNN)
+   if(PKG_${PKG_WITH_INCL})
+     include(Packages/${PKG_WITH_INCL})
+   endif()
+--- a/lammps/src/Depend.sh
++++ b/lammps/src/Depend.sh
+@@ -164,3 +164,13 @@
+   depend KOKKOS
+   depend OPENMP
+ fi
++
++# SPINGNN derives from SPIN; KOKKOS variants depend on the installed base files.
++if (test $1 = "SPIN") then
++  depend SPINGNN
++  depend KOKKOS
++fi
++
++if (test $1 = "SPINGNN") then
++  depend KOKKOS
++fi
+--- a/lammps/src/Makefile
++++ b/lammps/src/Makefile
+@@ -127,6 +127,7 @@
+ 	smtbq \
+ 	sph \
+ 	spin \
++	spingnn \
+ 	srd \
+ 	tally \
+ 	uef \
+--- a/lammps/src/SPIN/fix_spin_sib.cpp
++++ b/lammps/src/SPIN/fix_spin_sib.cpp
+@@ -23,6 +23,7 @@
+ ------------------------------------------------------------------------- */
+ 
+ #include "fix_spin_sib.h"
++#include "observe85.h" // OBS85_INCLUDE
+ 
+ #include "atom.h"
+ #include "citeme.h"
+@@ -388,12 +389,12 @@
+   // mixes half-step owned spins with stale ghost spins.  With Newton pair on,
+   // the ghost force contributions must also be returned to their owners just
+   // as they are in the regular Verlet force path.
+-  comm->forward_comm();
++  Observe85::forward(comm,Observe85::SIB_MID);
+   if (!lattice_flag)
+     for (int k = 0; k < npairspin; k++)
+       spin_pairs[k]->set_sib_geometry_reuse_hint(update->ntimestep);
+-  force->pair->compute(0,0);
+-  if (force->newton) comm->reverse_comm();
++  Observe85::pair(force->pair,0,0,Observe85::SIB_MID);
++  if (force->newton) Observe85::reverse(comm,Observe85::SIB_MID);
+ 
+   // collect spin forces with potential, external magnetic field first
+   for (int i = 0; i < nlocal; i++) {
+@@ -436,7 +437,7 @@
+ 
+   // if (lattice_flag) {
+   //   // update system with new spin if lattice_flag
+-  //   // force->pair->compute(0,0);
++  //   // Observe85::pair(force->pair,0,0,Observe85::SIB_MID);
+   //   // if not lattice_flag, it will be update in verlet main
+   // }
+ 
+--- a/lammps/src/SPIN/pair_spin.cpp
++++ b/lammps/src/SPIN/pair_spin.cpp
+@@ -104,12 +104,14 @@
+ 
+ void PairSpin::init_style_spin()
+ {
++  lattice_flag=0; // Fresh-run semantics, including moving -> no-provider reinit.
+   if (!atom->sp_flag)
+     error->all(FLERR,"Pair spin requires atom/spin style");
+ 
+   // checking if a spin integrator or neb/spin is a listed fix
+ 
+-  bool have_fix = ((modify->find_fix_by_style("^nve/spin") != -1)
++  bool have_fix = ((modify->find_fix_by_style("^spin/lpsib$") != -1)
++                   || (modify->find_fix_by_style("^nve/spin") != -1)
+                    || (modify->find_fix_by_style("^neb/spin") != -1)
+                    || (modify->find_fix_by_style("^spin/sib$") != -1)
+                    || (modify->find_fix_by_style("^spin/sib_npt$") != -1));
+@@ -130,6 +132,23 @@
+       lattice_flag = 1;
+   }
+ 
++  int providers=0, moving=0;
++  for(int j=0;j<modify->nfix;j++){
++    auto *f=modify->fix[j];
++    if(!std::strcmp(f->style,"spin/lpsib")){
++      int dim=-1; void *value=f->extract("spin_lattice_moving",dim);
++      if(!value || dim!=0) error->all(FLERR,"S85_LATTICE_PROVIDER_INVALID");
++      ++providers; moving=*static_cast<int*>(value);
++      if(moving && f->igroup!=0) error->all(FLERR,"spin/lpsib moving requires group all");
++    }
++  }
++  if(providers){
++    if(providers!=1 || modify->find_fix_by_style("^nve/spin")>=0 ||
++       modify->find_fix_by_style("^spin/sib$")>=0 || modify->find_fix_by_style("^spin/sib_npt$")>=0)
++      error->all(FLERR,"S85_CONFLICTING_LATTICE_PROVIDERS");
++    lattice_flag=moving;
++  }
++
+   // init. size of energy stacking lists
+ 
+   nlocal_max = atom->nlocal;
+--- a/lammps/src/fix_nh.cpp
++++ b/lammps/src/fix_nh.cpp
+@@ -372,11 +372,13 @@
+     } else if (strcmp(arg[iarg],"temp") == 0) {
+       iarg += 2;
+     } else if (strcmp(arg[iarg],"alpha") == 0) {
+-      if (iarg+2 > narg || strcmp(style,"spin/sib_npt") != 0)
++      if (iarg+2 > narg ||
++          (strcmp(style,"spin/sib_npt") != 0))
+         error->all(FLERR,"Illegal fix nvt/npt/nph command");
+       iarg += 2;
+     } else if (strcmp(arg[iarg],"seed") == 0) {
+-      if (iarg+2 > narg || strcmp(style,"spin/sib_npt") != 0)
++      if (iarg+2 > narg ||
++          (strcmp(style,"spin/sib_npt") != 0))
+         error->all(FLERR,"Illegal fix nvt/npt/nph command");
+       iarg += 2;
+ 
+--- a/lammps/src/pair_hybrid.h
++++ b/lammps/src/pair_hybrid.h
+@@ -32,6 +32,7 @@
+   friend class FixNVESpinSIB;
+   friend class FixNVESpinSIBNPT;
+   friend class FixOMP;
++  friend class FixSpinLPSIB; // S3 virial-adapter admission only, no layout change
+   friend class Force;
+   friend class Info;
+   friend class Neighbor;
+--- a/lammps/src/set.cpp
++++ b/lammps/src/set.cpp
+@@ -783,7 +783,15 @@
+     // overwrite dvalue, ivalue, xyzw value if variables defined
+     // else the input script scalar value remains in place
+ 
+-    if (varflag) {
++    if (varflag && keyword == SPIN) {
++      // SPIN arguments are magnitude,x,y,z, unlike the generic x,y,z,w map.
++      if (varflag1) dvalue = vec1[i];
++      if (varflag2) xvalue = vec2[i];
++      if (varflag3) yvalue = vec3[i];
++      if (varflag4) zvalue = vec4[i];
++      ivalue = static_cast<int> (dvalue);
++    }
++    else if (varflag) {
+       if (varflag1) {
+         dvalue = xvalue = vec1[i];
+         ivalue = static_cast<int> (dvalue);
+--- a/lammps/src/verlet.cpp
++++ b/lammps/src/verlet.cpp
+@@ -13,6 +13,7 @@
+ ------------------------------------------------------------------------- */
+ 
+ #include "verlet.h"
++#include "observe85.h" // OBS85_INCLUDE
+ 
+ #include "angle.h"
+ #include "atom.h"
+@@ -26,6 +27,7 @@
+ #include "improper.h"
+ #include "kspace.h"
+ #include "modify.h"
++#include "fix.h"
+ #include "neighbor.h"
+ #include "output.h"
+ #include "pair.h"
+@@ -35,6 +37,16 @@
+ #include <cstring>
+ 
+ using namespace LAMMPS_NS;
++namespace {
++bool s85_box_active(LAMMPS_NS::Modify *modify){
++  for(int i=0;i<modify->nfix;i++){
++    int dim=0;int *flag=static_cast<int*>(modify->fix[i]->extract("lpsib_box_iso",dim));
++    if(flag && *flag) return true;
++  }
++  return false;
++}
++}
++
+ 
+ /* ---------------------------------------------------------------------- */
+ 
+@@ -88,6 +100,7 @@
+ 
+ void Verlet::setup(int flag)
+ {
++  Observe85::reset(); // OBS85_RESET
+   if (comm->me == 0 && screen) {
+     fputs("Setting up Verlet run ...\n",screen);
+     if (flag) {
+@@ -122,7 +135,7 @@
+   domain->image_check();
+   domain->box_too_small_check();
+   modify->setup_pre_neighbor();
+-  neighbor->build(1);
++  Observe85::build(neighbor,1,(update->setupflag?Observe85::SETUP:Observe85::CORE));
+   modify->setup_post_neighbor();
+   neighbor->ncalls = 0;
+ 
+@@ -130,10 +143,11 @@
+ 
+   force->setup();
+   ev_set(update->ntimestep);
++  if(s85_box_active(modify)) vflag=(vflag & ~2)|1;
+   force_clear();
+   modify->setup_pre_force(vflag);
+ 
+-  if (pair_compute_flag) force->pair->compute(eflag,vflag);
++  if (pair_compute_flag) Observe85::pair(force->pair,eflag,vflag,(update->setupflag?Observe85::SETUP:Observe85::CORE));
+   else if (force->pair) force->pair->compute_dummy(eflag,vflag);
+ 
+   if (atom->molecular != Atom::ATOMIC) {
+@@ -150,7 +164,7 @@
+   }
+ 
+   modify->setup_pre_reverse(eflag,vflag);
+-  if (force->newton) comm->reverse_comm();
++  if (force->newton) Observe85::reverse(comm,(update->setupflag?Observe85::SETUP:Observe85::CORE));
+ 
+   modify->setup(vflag);
+   output->setup(flag);
+@@ -184,7 +198,7 @@
+     domain->image_check();
+     domain->box_too_small_check();
+     modify->setup_pre_neighbor();
+-    neighbor->build(1);
++    Observe85::build(neighbor,1,(update->setupflag?Observe85::SETUP:Observe85::CORE));
+     modify->setup_post_neighbor();
+     neighbor->ncalls = 0;
+   }
+@@ -192,10 +206,11 @@
+   // compute all forces
+ 
+   ev_set(update->ntimestep);
++  if(s85_box_active(modify)) vflag=(vflag & ~2)|1;
+   force_clear();
+   modify->setup_pre_force(vflag);
+ 
+-  if (pair_compute_flag) force->pair->compute(eflag,vflag);
++  if (pair_compute_flag) Observe85::pair(force->pair,eflag,vflag,(update->setupflag?Observe85::SETUP:Observe85::CORE));
+   else if (force->pair) force->pair->compute_dummy(eflag,vflag);
+ 
+   if (atom->molecular != Atom::ATOMIC) {
+@@ -212,7 +227,7 @@
+   }
+ 
+   modify->setup_pre_reverse(eflag,vflag);
+-  if (force->newton) comm->reverse_comm();
++  if (force->newton) Observe85::reverse(comm,(update->setupflag?Observe85::SETUP:Observe85::CORE));
+ 
+   modify->setup(vflag);
+   update->setupflag = 0;
+@@ -224,6 +239,7 @@
+ 
+ void Verlet::run(int n)
+ {
++  const bool s85_box=s85_box_active(modify);
+   bigint ntimestep;
+   int nflag,sortflag;
+ 
+@@ -247,6 +263,7 @@
+ 
+     ntimestep = ++update->ntimestep;
+     ev_set(ntimestep);
++    if(s85_box) vflag=(vflag & ~2)|1;
+ 
+     // initial time integration
+ 
+@@ -261,7 +278,7 @@
+ 
+     if (nflag == 0) {
+       timer->stamp();
+-      comm->forward_comm();
++      Observe85::forward(comm,(update->setupflag?Observe85::SETUP:Observe85::CORE));
+       timer->stamp(Timer::COMM);
+     } else {
+       if (n_pre_exchange) {
+@@ -286,7 +303,7 @@
+         modify->pre_neighbor();
+         timer->stamp(Timer::MODIFY);
+       }
+-      neighbor->build(1);
++      Observe85::build(neighbor,1,(update->setupflag?Observe85::SETUP:Observe85::CORE));
+       timer->stamp(Timer::NEIGH);
+       if (n_post_neighbor) {
+         modify->post_neighbor();
+@@ -309,7 +326,7 @@
+     }
+ 
+     if (pair_compute_flag) {
+-      force->pair->compute(eflag,vflag);
++      Observe85::pair(force->pair,eflag,vflag,(update->setupflag?Observe85::SETUP:Observe85::CORE));
+       timer->stamp(Timer::PAIR);
+     }
+ 
+@@ -334,7 +351,7 @@
+     // reverse communication of forces
+ 
+     if (force->newton) {
+-      comm->reverse_comm();
++      Observe85::reverse(comm,(update->setupflag?Observe85::SETUP:Observe85::CORE));
+       timer->stamp(Timer::COMM);
+     }
+ 
+@@ -359,6 +376,7 @@
+ 
+ void Verlet::cleanup()
+ {
++  if(comm->me==0) Observe85::emit(screen); // OBS85_EMIT
+   modify->post_run();
+   domain->box_too_small_check();
+   update->update_time();

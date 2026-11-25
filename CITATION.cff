@@ -1,0 +1,52 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite the paper given under
+  preferred-citation. This package builds on SpinGNN; please also cite the
+  SpinGNN papers listed in https://github.com/Hyyu-Lab/SpinGNN.
+title: SpinGNN-LAMMPS
+type: software
+version: 0.1.0
+date-released: 2026-11-25
+repository-code: https://github.com/Hyyu-Lab/spingnn-lammps
+url: https://github.com/Hyyu-Lab/spingnn-lammps
+license:
+  - GPL-2.0-only
+  - AGPL-3.0-only
+abstract: >-
+  LAMMPS package for finite-temperature spin-lattice dynamics with
+  machine-learned and analytic magnetic potentials. It provides the
+  cached-field integrator (CFI, fix spin/lpsib), which needs one core model
+  evaluation per step, and offline tools for the geometric-probe spin
+  temperature (GPST), which uses first-order spin forces only.
+authors:
+  - given-names: Yuanmai
+    family-names: Zheng
+    affiliation: Fudan University
+keywords:
+  - spin-lattice dynamics
+  - magnetic materials
+  - machine-learning interatomic potentials
+  - spin temperature
+  - LAMMPS
+preferred-citation:
+  type: article
+  title: Efficient spin-lattice dynamics and spin thermometry with machine-learned magnetic potentials
+  authors:
+    - given-names: Yuanmai
+      family-names: Zheng
+    - given-names: Liangliang
+      family-names: Hong
+    - given-names: Xingao
+      family-names: Gong
+    - given-names: Hongjun
+      family-names: Xiang
+      orcid: https://orcid.org/0000-0002-9396-3214
+    - given-names: Hongyu
+      family-names: Yu
+      orcid: https://orcid.org/0000-0002-2513-2523
+  year: 2026
+  date-published: 2026-11-24
+  url: https://arxiv.org/abs/2611.32129
+  identifiers:
+    - type: url
+      value: https://arxiv.org/abs/2611.32129
